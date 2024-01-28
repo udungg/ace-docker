@@ -1,0 +1,39 @@
+FROM registry.access.redhat.com/ubi9/ubi-minimal as builder
+
+RUN microdnf update -y && microdnf install -y util-linux tar && microdnf clean all
+
+COPY 12.0.11.0-ACE-LINUX64-DEVELOPER.tar.gz /tmp/
+RUN mkdir -p /opt/ibm/ace-12 && \
+    tar xvf  /tmp/12.0.11.0-ACE-LINUX64-DEVELOPER.tar.gz \
+    --exclude ace-12.0.11.0/tools \
+    --exclude ace-12.0.11.0/server/tools/ibm-dfdl-java.zip \
+    --exclude ace-12.0.11.0/server/tools/proxyservlet.war \
+    --exclude ace-12.0.11.0/server/bin/TADataCollector.sh \
+    --exclude ace-12.0.11.0/server/transformationAdvisor/ta-plugin-ace.jar \
+    --strip-components 1 \
+    --directory /opt/ibm/ace-12 && rm -f /tmp/12.0.11.0-ACE-LINUX64-DEVELOPER.tar.gz
+
+FROM registry.access.redhat.com/ubi9/ubi-minimal
+
+# Force reinstall tzdata package to get zoneinfo files
+RUN microdnf update -y && microdnf install -y findutils util-linux which tar && microdnf reinstall -y tzdata && microdnf clean all
+
+# Install ACE v12.0.4.0 and accept the license
+COPY --from=builder /opt/ibm/ace-12 /opt/ibm/ace-12
+RUN /opt/ibm/ace-12/ace make registry global accept license deferred \
+    && useradd --uid 1001 --create-home --home-dir /home/aceuser --shell /bin/bash -G mqbrkrs aceuser \
+    && su - aceuser -c "export LICENSE=accept && . /opt/ibm/ace-12/server/bin/mqsiprofile && mqsicreateworkdir /home/aceuser/ace-server" \
+    && echo ". /opt/ibm/ace-12/server/bin/mqsiprofile" >> /home/aceuser/.bashrc
+
+# Add required license as text file in Liceses directory (GPL, MIT, APACHE, Partner End User Agreement, etc)
+COPY /licenses/ /licenses/
+
+# aceuser
+USER 1001
+
+# Expose ports.  7600, 7800, 7843 for ACE;
+EXPOSE 7600 7800 7843
+
+
+# Set entrypoint to run the server
+ENTRYPOINT ["bash", "-c", ". /opt/ibm/ace-12/server/bin/mqsiprofile && IntegrationServer --name ace-server -w /home/aceuser/ace-server"]
